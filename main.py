@@ -39,7 +39,7 @@ def list_jobs():
 async def submit(mode:str=Form("text"),prompt:str=Form(...),negative:str=Form(""),
     width:int=Form(832),height:int=Form(480),frames:int=Form(81),seed:int|None=Form(None),
     image:UploadFile|None=File(None)):
-    if mode not in ("text","image","hf") or not 3<=len(prompt)<=5000: raise HTTPException(422,"Invalid mode or prompt")
+    if mode not in ("text","image","hf","cpu") or not 3<=len(prompt)<=5000: raise HTTPException(422,"Invalid mode or prompt")
     if not (256<=width<=1920 and 256<=height<=1080 and 9<=frames<=241):raise HTTPException(422,"Invalid dimensions or frames")
     ident=secrets.token_hex(12); image_path=None
     if mode=="image":
@@ -70,6 +70,12 @@ def replace_values(v,mapping):
     return v
 
 def render(job):
+    if job["mode"] == "cpu":
+        from cpu_renderer import render_cpu
+        filename=job["id"]+".mp4"
+        render_cpu(job["prompt"],OUT/filename,job["seed"],job["width"],job["height"],job["frames"])
+        return filename
+
     if job["mode"] == "hf":
         hf_token=os.environ.get("HF_TOKEN","")
         if not hf_token:
