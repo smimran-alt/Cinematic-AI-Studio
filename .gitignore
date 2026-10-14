@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+data/
+outputs/
+workflows/text.json
+workflows/image.json
