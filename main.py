@@ -39,7 +39,7 @@ def list_jobs():
 async def submit(mode:str=Form("text"),prompt:str=Form(...),negative:str=Form(""),
     width:int=Form(832),height:int=Form(480),frames:int=Form(81),seed:int|None=Form(None),
     image:UploadFile|None=File(None)):
-    if mode not in ("text","image") or not 3<=len(prompt)<=5000: raise HTTPException(422,"Invalid mode or prompt")
+    if mode not in ("text","image","hf") or not 3<=len(prompt)<=5000: raise HTTPException(422,"Invalid mode or prompt")
     if not (256<=width<=1920 and 256<=height<=1080 and 9<=frames<=241):raise HTTPException(422,"Invalid dimensions or frames")
     ident=secrets.token_hex(12); image_path=None
     if mode=="image":
@@ -70,6 +70,21 @@ def replace_values(v,mapping):
     return v
 
 def render(job):
+    if job["mode"] == "hf":
+        hf_token=os.environ.get("HF_TOKEN","")
+        if not hf_token:
+            raise RuntimeError("HF_TOKEN is not configured on your private backend")
+        from huggingface_hub import InferenceClient
+        model=os.environ.get("HF_VIDEO_MODEL","Wan-AI/Wan2.2-TI2V-5B")
+        provider=os.environ.get("HF_VIDEO_PROVIDER","fal-ai")
+        result=InferenceClient(provider=provider,api_key=hf_token,timeout=900).text_to_video(
+            job["prompt"],model=model)
+        if not isinstance(result,bytes):
+            raise RuntimeError("Hugging Face did not return video bytes")
+        filename=job["id"]+".mp4"
+        (OUT/filename).write_bytes(result)
+        return filename
+
     workflow=ROOT/"workflows"/(job["mode"]+".json")
     if not workflow.exists():raise RuntimeError("Missing ComfyUI API workflow: "+str(workflow))
     mapping={"__PROMPT__":job["prompt"],"__NEGATIVE__":job["negative"],"__WIDTH__":job["width"],
