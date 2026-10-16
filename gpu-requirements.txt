@@ -1,0 +1,9 @@
+# Install on GPU in addition to requirements.txt.
+# The RunPod PyTorch image should supply CUDA-enabled torch.
+diffusers>=0.34,<1
+transformers>=4.44,<5
+accelerate>=1,<2
+safetensors>=0.4,<1
+sentencepiece>=0.2,<1
+imageio>=2.34,<3
+imageio-ffmpeg>=0.5,<1
