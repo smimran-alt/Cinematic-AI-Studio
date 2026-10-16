@@ -29,7 +29,13 @@ def health():
         with httpx.Client(timeout=5) as c: r=c.get(COMFY+"/system_stats");r.raise_for_status()
         connected=True
     except Exception: connected=False
-    return {"connected":connected}
+    gpu_ready=False; gpu_name=""
+    try:
+        import torch
+        gpu_ready=torch.cuda.is_available()
+        if gpu_ready: gpu_name=torch.cuda.get_device_name(0)
+    except Exception: pass
+    return {"connected":connected,"gpu_ready":gpu_ready,"gpu_name":gpu_name}
 
 @app.get("/api/jobs",dependencies=[Depends(authorized)])
 def list_jobs():
@@ -39,7 +45,7 @@ def list_jobs():
 async def submit(mode:str=Form("text"),prompt:str=Form(...),negative:str=Form(""),
     width:int=Form(832),height:int=Form(480),frames:int=Form(81),seed:int|None=Form(None),
     image:UploadFile|None=File(None)):
-    if mode not in ("text","image","hf","cpu") or not 3<=len(prompt)<=5000: raise HTTPException(422,"Invalid mode or prompt")
+    if mode not in ("text","image","hf","cpu","gpu") or not 3<=len(prompt)<=5000: raise HTTPException(422,"Invalid mode or prompt")
     if not (256<=width<=1920 and 256<=height<=1080 and 9<=frames<=241):raise HTTPException(422,"Invalid dimensions or frames")
     ident=secrets.token_hex(12); image_path=None
     if mode=="image":
@@ -70,6 +76,9 @@ def replace_values(v,mapping):
     return v
 
 def render(job):
+    if job["mode"] == "gpu":
+        from gpu_renderer import render_gpu
+        return render_gpu(job, OUT/(job["id"]+".mp4"))
     if job["mode"] == "cpu":
         from cpu_renderer import render_cpu
         filename=job["id"]+".mp4"
