@@ -14,7 +14,7 @@ const PUBLIC_GATEWAY='https://REPLACE-WITH-YOUR-PUBLIC-GATEWAY.workers.dev';
 const publicMode=!PUBLIC_GATEWAY.includes('REPLACE-WITH-YOUR-PUBLIC-GATEWAY');
 const ownerJobsKey='cinematic_guest_jobs';
 const myJobs=()=>{try{return JSON.parse(localStorage.getItem(ownerJobsKey)||'[]').filter(x=>/^[a-f0-9]{24}$/.test(x)).slice(0,20)}catch{return []}};
-if(publicMode){api=PUBLIC_GATEWAY.replace(/\\/$/,'');$('privateConnect').hidden=true;$('publicMessage').textContent='No login required. Enter your prompt below and generate a video. Your GPU backend must be online.';}
+if(publicMode){api=PUBLIC_GATEWAY.replace(/\/$/,'');$('privateConnect').hidden=true;$('publicMessage').textContent='No login required. Enter your prompt below and generate a video. Your GPU backend must be online.';}
 $('api').value=sessionStorage.getItem('studio_api')||'';$('token').value=sessionStorage.getItem('studio_token')||'';
 const show=(id,msg)=>$(id).textContent=msg;function url(s){const u=new URL(s);if(u.protocol!=='https:')throw Error('An HTTPS URL is required');return u.origin+u.pathname.replace(/\/$/,'')}
 async function call(path,opts={}){if(!api||(publicMode===false&&!token))throw Error('Connect to your backend first');const headers=new Headers(opts.headers||{});if(!publicMode)headers.set('Authorization','Bearer '+token);const r=await fetch(api+path,{...opts,headers});if(!r.ok){let m='HTTP '+r.status;try{m=(await r.json()).detail||m}catch{}throw Error(m)}return r}
