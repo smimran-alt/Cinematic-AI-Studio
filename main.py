@@ -16,7 +16,7 @@ if len(TOKEN)<24: raise RuntimeError("Set STUDIO_TOKEN to a random secret of at 
 COMFY=os.environ.get("COMFYUI_URL","http://127.0.0.1:8188").rstrip("/")
 ORIGIN=os.environ.get("ALLOWED_ORIGIN","https://smimran-alt.github.io")
 app=FastAPI(title="Cinematic AI Studio")
-app.add_middleware(CORSMiddleware,allow_origins=[ORIGIN],allow_credentials=False,allow_methods=["GET","POST"],allow_headers=["Authorization","Content-Type"])
+app.add_middleware(CORSMiddleware,allow_origins=[ORIGIN],allow_credentials=False,allow_methods=["GET","POST","DELETE"],allow_headers=["Authorization","Content-Type"])
 jobs={}; queue=Queue(); lock=threading.Lock()
 
 def authorized(authorization:str|None=Header(None)):
@@ -40,6 +40,26 @@ def health():
 @app.get("/api/jobs",dependencies=[Depends(authorized)])
 def list_jobs():
     with lock: return sorted([dict(v) for v in jobs.values()],key=lambda x:x["created"],reverse=True)
+
+@app.delete("/api/jobs/completed",dependencies=[Depends(authorized)])
+def clear_finished_jobs():
+    """Delete completed/failed job history and local media; preserve active jobs."""
+    removed=[]
+    with lock:
+        for ident, record in list(jobs.items()):
+            if record.get("status") in ("completed", "failed"):
+                removed.append(record)
+                del jobs[ident]
+    for record in removed:
+        file_name=record.get("filename")
+        if file_name and Path(file_name).name==file_name:
+            (OUT/file_name).unlink(missing_ok=True)
+        image_path=record.get("image_path")
+        if image_path:
+            p=Path(image_path)
+            if p.parent.resolve()==UP.resolve():
+                p.unlink(missing_ok=True)
+    return {"deleted": len(removed)}
 
 @app.post("/api/jobs",dependencies=[Depends(authorized)])
 async def submit(mode:str=Form("text"),prompt:str=Form(...),negative:str=Form(""),
