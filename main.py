@@ -1,6 +1,6 @@
 """Private single-user FastAPI service for the GitHub-hosted Cinematic AI Studio.
 Requires an installed ComfyUI model and compatible workflow JSONs."""
-import os, json, time, secrets, threading, shutil
+import os, json, time, secrets, threading, shutil, subprocess, math
 from pathlib import Path
 from queue import Queue
 import httpx
@@ -63,10 +63,12 @@ def clear_finished_jobs():
 
 @app.post("/api/jobs",dependencies=[Depends(authorized)])
 async def submit(mode:str=Form("text"),prompt:str=Form(...),negative:str=Form(""),
-    width:int=Form(832),height:int=Form(480),frames:int=Form(81),seed:int|None=Form(None),
+    width:int=Form(832),height:int=Form(480),frames:int=Form(81),duration:int|None=Form(None),seed:int|None=Form(None),
     image:UploadFile|None=File(None)):
     if mode not in ("text","image","hf","cpu","gpu") or not 3<=len(prompt)<=5000: raise HTTPException(422,"Invalid mode or prompt")
     if not (256<=width<=1920 and 256<=height<=1080 and 9<=frames<=241):raise HTTPException(422,"Invalid dimensions or frames")
+    if duration is not None and duration not in (5,10,20,30): raise HTTPException(422,"Duration must be 5, 10, 20 or 30 seconds")
+    if duration is not None and mode!="text": raise HTTPException(422,"Duration mode currently supports text-to-video only")
     ident=secrets.token_hex(12); image_path=None
     if mode=="image":
         if image is None or image.content_type not in ("image/jpeg","image/png","image/webp"):raise HTTPException(422,"PNG, JPEG or WebP image required")
@@ -77,7 +79,7 @@ async def submit(mode:str=Form("text"),prompt:str=Form(...),negative:str=Form(""
         image_path.write_bytes(content)
     record={"id":ident,"mode":mode,"prompt":prompt,"negative":negative,"width":width,"height":height,"frames":frames,
             "seed":seed if seed is not None else secrets.randbelow(2147483647),"image_path":str(image_path) if image_path else None,
-            "status":"queued","filename":None,"error":None,"created":time.time()}
+            "status":"queued","filename":None,"error":None,"created":time.time(),"duration":duration,"progress":0}
     with lock:jobs[ident]=record
     queue.put(ident)
     return {"id":ident,"status":"queued"}
@@ -95,7 +97,42 @@ def replace_values(v,mapping):
         for key,val in mapping.items():v=v.replace(key,str(val))
     return v
 
+def render_movie(job):
+    """Produce a timed MP4 from sequential ~5-second Wan clips."""
+    import imageio_ffmpeg
+    ffmpeg=imageio_ffmpeg.get_ffmpeg_exe()
+    seconds=job["duration"]
+    clips=math.ceil(seconds / (81 / 16))
+    segments=[]
+    try:
+        for i in range(clips):
+            with lock:
+                if job["id"] in jobs: jobs[job["id"]]["progress"]=i
+            part=dict(job, id=f'{job["id"]}_part{i+1}', duration=None, frames=81,
+                      seed=(job["seed"]+i) % 2147483647)
+            filename=render(part)
+            source=OUT/filename
+            if source.suffix.lower() not in (".mp4",".webm",".gif"):
+                raise RuntimeError("Unsupported clip type")
+            segments.append(source)
+        final=OUT/(job["id"]+".mp4")
+        # Re-encode in one continuous output, normalize timestamps and match requested duration.
+        args=[ffmpeg,"-hide_banner","-loglevel","error","-y"]
+        for source in segments: args.extend(["-i",str(source)])
+        inputs="".join(f"[{i}:v:0]setpts=PTS-STARTPTS,fps=16,scale={job['width']}:{job['height']}:flags=lanczos,setsar=1[v{i}];" for i in range(len(segments)))
+        concat="".join(f"[v{i}]" for i in range(len(segments)))+f"concat=n={len(segments)}:v=1:a=0[outv]"
+        args.extend(["-filter_complex",inputs+concat,"-map","[outv]","-t",str(seconds),
+                     "-c:v","libx264","-pix_fmt","yuv420p","-crf","19","-preset","veryfast",
+                     "-movflags","+faststart",str(final)])
+        completed=subprocess.run(args,capture_output=True,text=True,timeout=900)
+        if completed.returncode!=0:
+            raise RuntimeError("MP4 joining failed: "+completed.stderr[-400:])
+        return final.name
+    finally:
+        for source in segments: source.unlink(missing_ok=True)
+
 def render(job):
+    if job.get("duration") and job["mode"]=="text": return render_movie(job)
     if job["mode"] == "gpu":
         from gpu_renderer import render_gpu
         return render_gpu(job, OUT/(job["id"]+".mp4"))
